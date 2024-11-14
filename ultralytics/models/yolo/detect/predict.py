@@ -20,33 +20,38 @@ class DetectionPredictor(BasePredictor):
         ```
     """
 
-    def postprocess(self, preds, img, orig_imgs):
-        """Post-processes predictions and returns a list of Results objects."""
+def postprocess(self, preds, img, orig_imgs):
+    """Post-processes predictions and returns a list of Results objects."""
 
-        # Step 1: Define the target classes and set self.args.classes to filter them
-        target_classes = [41, 42, 43, 44, 45, 46, 47, 49] 
-        self.args.classes = target_classes  # Set the classes to restrict detection
+    # Step 1: Run NMS without specifying classes (if `self.args.classes` didn't work)
+    preds = ops.non_max_suppression(
+        preds,
+        self.args.conf,
+        self.args.iou,
+        agnostic=self.args.agnostic_nms,
+        max_det=self.args.max_det
+    )
 
-        # Step 2: Apply non-max suppression with the updated `classes` filter
-        preds = ops.non_max_suppression(
-            preds,
-            self.args.conf,
-            self.args.iou,
-            agnostic=self.args.agnostic_nms,
-            max_det=self.args.max_det,
-            classes=self.args.classes,  # Use the restricted classes
-        )
+    if not isinstance(orig_imgs, list):  # input images are a torch.Tensor, not a list
+        orig_imgs = ops.convert_torch2numpy_batch(orig_imgs)
 
-        if not isinstance(orig_imgs, list):  # input images are a torch.Tensor, not a list
-            orig_imgs = ops.convert_torch2numpy_batch(orig_imgs)
+    # Step 2: Define target classes and manually filter detections
+    target_classes = [41, 42, 43, 44, 45, 46, 47, 49]  # Replace these IDs with those for apple, orange, etc.
+    
+    results = []
+    for i, pred in enumerate(preds):
+        orig_img = orig_imgs[i]
 
-        results = []
-        for i, pred in enumerate(preds):
-            orig_img = orig_imgs[i]
+        # Manually filter out predictions not in `target_classes`
+        filtered_pred = pred[[cls in target_classes for cls in pred[:, 5].tolist()]]  # Keeps only target class detections
 
-            # Scaling and final formatting for the bounding boxes
-            pred[:, :4] = ops.scale_boxes(img.shape[2:], pred[:, :4], orig_img.shape)
+        # Step 3: Process the filtered predictions
+        if filtered_pred.shape[0] > 0:  # If there are any detections remaining after filtering
+            filtered_pred[:, :4] = ops.scale_boxes(img.shape[2:], filtered_pred[:, :4], orig_img.shape)
             img_path = self.batch[0][i]
-            results.append(Results(orig_img, path=img_path, names=self.model.names, boxes=pred))
+            results.append(Results(orig_img, path=img_path, names=self.model.names, boxes=filtered_pred))
+        else:
+            # Append an empty result if no target class detections were found
+            results.append(Results(orig_img, path=self.batch[0][i], names=self.model.names, boxes=[]))
 
-        return results
+    return results
